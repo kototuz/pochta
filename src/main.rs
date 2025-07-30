@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::ffi::{c_int, c_char, c_short, CStr};
-use std::io::{Write, stdout, stdin};
+use std::io::{Write, stdout};
 use std::process::ExitCode;
+use std::path::Path;
 
 mod curl;
 use curl::CurlEasy;
@@ -9,6 +10,8 @@ use curl::RecvResult;
 
 use tinyjson::JsonValue;
 use base64::prelude::*;
+
+use rustyline::error::ReadlineError;
 
 const CLIENT_ID:     &str = env!("CLIENT_ID");
 const CLIENT_SECRET: &str = env!("CLIENT_SECRET");
@@ -149,30 +152,69 @@ fn main2() -> Option<()> {
     let auth_string = get_new_auth_string()?;
     let mut gmail = GmailClient::connect()?;
     let mut resp = Vec::<u8>::new();
+    let mut stdout = stdout();
 
     // Authenticate using google xoauth2
     gmail.send_cmd("AUTHENTICATE XOAUTH2", &mut resp)?;
     assert!(resp.starts_with(b"+"));
     gmail.send_raw_lit(&auth_string.as_bytes(), &mut resp)?;
-    stdout().write_all(&resp).unwrap();
+    stdout.write_all(&resp).unwrap();
 
-    let mut input = String::new();
-    loop {
-        print!(">> ");
-        stdout().flush().unwrap();
-        if let Err(e) = stdin().read_line(&mut input) {
-            eprintln!("error: could not read line: {e}");
+    // Init rustyline
+    let mut rl = match rustyline::DefaultEditor::new() {
+        Ok(rl) => rl,
+        Err(e) => {
+            eprintln!("error: could not init 'rustyline': {e}");
             return None;
         }
+    };
 
-        // TODO: Add exit on <C-d>
-
-        input.pop();
-        gmail.send_cmd(&input, &mut resp)?;
-        print!("{}", std::str::from_utf8(&resp).unwrap());
-
-        input.clear();
+    // Load history file. Create if it does not exist
+    let history_path = Path::new(concat!(env!("HOME"), "/.pochta/history.txt"));
+    match rl.load_history(history_path) {
+        Err(ReadlineError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("info: history file does not exist - creating history file '~/.pochta/history.txt'");
+            if let Err(e) = std::fs::create_dir_all(history_path.parent().unwrap()) {
+                eprintln!("error: could not create history file: {e}");
+            }
+            if let Err(e) = std::fs::File::create(history_path) {
+                eprintln!("error: could not create history file: {e}");
+            }
+        },
+        Err(e) => {
+            eprintln!("error: could not load history: {e}");
+        },
+        _ => {}
     }
+
+    // Main loop
+    loop {
+        match rl.readline(">> ") {
+            Ok(line) => {
+                if let Err(e) = rl.add_history_entry(&line) {
+                    eprintln!("error: could not add entry to history: {e}");
+                }
+
+                gmail.send_cmd(&line, &mut resp)?;
+                stdout.write_all(&resp).unwrap();
+            },
+            Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
+                gmail.send_cmd("LOGOUT", &mut resp)?;
+                stdout.write_all(&resp).unwrap();
+                break;
+            },
+            Err(err) => {
+                eprintln!("error: rustyline: {err}");
+                return None;
+            },
+        }
+    }
+
+    if let Err(e) = rl.save_history(history_path) {
+        eprintln!("error: could not append to history: {e}");
+    }
+
+    Some(())
 }
 
 fn main() -> ExitCode {
@@ -181,3 +223,6 @@ fn main() -> ExitCode {
         None    => ExitCode::FAILURE
     }
 }
+
+// TODO: Shortcut system
+// TODO: Integration with browsers (to open html) and editors (convenience)

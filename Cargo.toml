@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 tinyjson = "2.5.1"
 base64 = "0.22.1"
+rustyline = "16.0.0"
+nix = "0.30.1"
