@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::ffi::c_int;
+use std::ffi::{c_int, c_char, c_short, CStr};
 use std::io::{Write, stdout, stdin};
 use std::process::ExitCode;
 
 mod curl;
 use curl::CurlEasy;
+use curl::RecvResult;
 
 use tinyjson::JsonValue;
 use base64::prelude::*;
@@ -15,9 +16,26 @@ const REFRESH_TOKEN: &str = env!("REFRESH_TOKEN");
 const USER:          &str = env!("EMAIL");
 
 struct GmailClient {
-    curl:   CurlEasy,
-    tag:    u32,
-    sockfd: c_int,
+    curl:     CurlEasy,
+    tag:      u32,
+    sockfd:   c_int,
+    resp_buf: [u8; 1024]
+}
+
+#[repr(C)]
+struct Pollfd {
+    fd:      c_int,
+    events:  c_short,
+    revents: c_short,
+}
+
+#[link(name = "c")]
+unsafe extern "C" {
+    #[link_name = "__errno_location"]
+    fn errno() -> *const c_int;
+
+    fn strerror(err: c_int) -> *const c_char;
+    fn poll(pollfds: *mut Pollfd, count: u64, timeout: c_int) -> c_int;
 }
 
 impl GmailClient {
@@ -27,16 +45,59 @@ impl GmailClient {
         curl.set_connect_only()?;
         curl.perform()?;
         Some(Self {
-            sockfd: curl.get_sockfd()?,
-            curl:   curl,
-            tag:    0,
+            sockfd:   curl.get_sockfd()?,
+            curl:     curl,
+            tag:      0,
+            resp_buf: [0u8; 1024],
         })
+    }
+
+    fn wait_for_input(&self) -> Option<()> {
+        const POLLIN: c_short = 1;
+        let mut p = Pollfd { fd: self.sockfd, events: POLLIN, revents: 0 };
+        unsafe {
+            if poll(&mut p, 1, -1) == -1 {
+                let err_str = CStr::from_ptr(strerror(*errno())).to_str().unwrap();
+                eprintln!("error: poll: {}", err_str);
+                None
+            } else {
+                Some(())
+            }
+        }
+    }
+
+    fn recv_all(&mut self, buf: &mut Vec<u8>, tag: &[u8]) -> Option<()> {
+        self.wait_for_input()?;
+        loop {
+            match self.curl.recv(&mut self.resp_buf)? {
+                RecvResult::Ok(recv) => buf.extend_from_slice(&self.resp_buf[..recv]),
+                RecvResult::Again => {
+                    if buf.ends_with(b"\r\n") {
+                        let last_str_begin = buf.iter()
+                            .take(buf.len() - 2)
+                            .rposition(|s| *s == b'\n')
+                            .map(|pos| pos+1)
+                            .unwrap_or(0);
+
+                        let last_str = &buf[last_str_begin..];
+                        if last_str.starts_with(tag) || last_str.starts_with(b"+") {
+                            break;
+                        }
+                    }
+
+                    self.wait_for_input()?;
+                }
+            }
+        }
+
+        Some(())
     }
 
     fn send_cmd(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
         resp.clear();
-        self.curl.send(&format!("K{:04x} {cmd}\r\n", self.tag).as_bytes())?;
-        self.curl.recv(resp, self.sockfd)?;
+        let tag = format!("K{:04}", self.tag);
+        self.curl.send(&format!("{tag} {cmd}\r\n").as_bytes())?;
+        self.recv_all(resp, &tag.as_bytes())?;
         self.tag += 1;
         Some(())
     }
@@ -45,7 +106,8 @@ impl GmailClient {
         resp.clear();
         self.curl.send(lit)?;
         self.curl.send(b"\r\n")?;
-        self.curl.recv(resp, self.sockfd)?;
+        let tag = format!("K{:04}", self.tag-1);
+        self.recv_all(resp, &tag.as_bytes())?;
         Some(())
     }
 }
@@ -94,10 +156,6 @@ fn main2() -> Option<()> {
     gmail.send_raw_lit(&auth_string.as_bytes(), &mut resp)?;
     stdout().write_all(&resp).unwrap();
 
-    // TODO: Sometimes only the first part of response is printed.
-    //       The the second part will be printed after the next input.
-    //       Idk why this happens. Maybe it's fucking rust with his locks.
-    //       Can test with c print functions. For now it's not critical
     let mut input = String::new();
     loop {
         print!(">> ");

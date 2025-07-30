@@ -1,8 +1,10 @@
-use std::ffi::{c_void, c_int, c_char, c_long, c_short, CStr};
+use std::ffi::{c_void, c_int, c_char, c_long, CStr};
 
-pub struct CurlEasy {
-    curl:     *const c_void,
-    recv_buf: [u8; 1024]
+pub struct CurlEasy(*const c_void);
+
+pub enum RecvResult {
+    Ok(usize), // usize: received byte count
+    Again      // CURLE_AGAIN
 }
 
 #[repr(C)]
@@ -15,25 +17,11 @@ enum CurlOption {
     ConnectOnly   = 141,
 }
 
-#[repr(C)]
-struct Pollfd {
-    fd:      c_int,
-    events:  c_short,
-    revents: c_short,
-}
-
 type CurlCode = c_int;
 const CURLE_OK: c_int = 0;
 
 #[link(name = "curl")]
-#[link(name = "c")]
 unsafe extern "C" {
-    #[link_name = "__errno_location"]
-    fn errno() -> *const c_int;
-
-    fn strerror(err: c_int) -> *const c_char;
-    fn poll(pollfds: *mut Pollfd, count: u64, timeout: c_int) -> c_int;
-
     fn curl_easy_init() -> *const c_void;
     fn curl_easy_cleanup(curl: *const c_void);
     fn curl_easy_setopt(curl: *const c_void, opt: CurlOption, ...) -> CurlCode;
@@ -60,14 +48,14 @@ impl CurlEasy {
                 eprintln!("error: curl: could not init");
                 None
             } else {
-                Some(Self{ curl: res, recv_buf: [0u8; 1024] })
+                Some(Self(res))
             }
         }
     }
 
     pub fn set_url(&self, url: &CStr) -> Option<()> {
         unsafe {
-            let res = curl_easy_setopt(self.curl, CurlOption::Url, url.as_ptr());
+            let res = curl_easy_setopt(self.0, CurlOption::Url, url.as_ptr());
             if res != CURLE_OK {
                 eprintln!("error: curl: {}", err_str!(res));
                 None
@@ -84,7 +72,7 @@ impl CurlEasy {
             res.push('=');
 
             unsafe {
-                let encoded = curl_easy_escape(self.curl, param.1.as_ptr() as *const c_char, param.1.len() as c_int);
+                let encoded = curl_easy_escape(self.0, param.1.as_ptr() as *const c_char, param.1.len() as c_int);
                 res.push_str(CStr::from_ptr(encoded).to_str().unwrap());
                 curl_free(encoded as *mut c_void);
             }
@@ -99,13 +87,13 @@ impl CurlEasy {
 
     pub fn set_post_fields(&self, fields: &mut str) -> Option<()> {
         unsafe {
-            let mut res = curl_easy_setopt(self.curl, CurlOption::PostFieldSize, fields.len() as c_long);
+            let mut res = curl_easy_setopt(self.0, CurlOption::PostFieldSize, fields.len() as c_long);
             if res != CURLE_OK {
                 eprintln!("error: curl: {}", err_str!(res));
                 return None;
             }
 
-            res = curl_easy_setopt(self.curl, CurlOption::PostFields, fields.as_ptr() as *mut c_char);
+            res = curl_easy_setopt(self.0, CurlOption::PostFields, fields.as_ptr() as *mut c_char);
             if res != CURLE_OK {
                 eprintln!("error: curl: {}", err_str!(res));
                 None
@@ -117,13 +105,13 @@ impl CurlEasy {
 
     pub fn set_write_data(&self, buf: *mut Vec<u8>) -> Option<()> {
         unsafe {
-            let mut res = curl_easy_setopt(self.curl, CurlOption::WriteFunction, Self::write_callback as *const c_void);
+            let mut res = curl_easy_setopt(self.0, CurlOption::WriteFunction, Self::write_callback as *const c_void);
             if res != CURLE_OK {
                 eprintln!("error: curl: {}", err_str!(res));
                 return None;
             }
 
-            res = curl_easy_setopt(self.curl, CurlOption::WriteData, buf);
+            res = curl_easy_setopt(self.0, CurlOption::WriteData, buf);
             if res != CURLE_OK {
                 eprintln!("error: curl: {}", err_str!(res));
                 None
@@ -135,7 +123,7 @@ impl CurlEasy {
 
     pub fn set_connect_only(&self) -> Option<()> {
         unsafe {
-            let res = curl_easy_setopt(self.curl, CurlOption::ConnectOnly, 1);
+            let res = curl_easy_setopt(self.0, CurlOption::ConnectOnly, 1);
             if res != CURLE_OK {
                 eprintln!("error: curl: {}", err_str!(res));
                 None
@@ -149,7 +137,7 @@ impl CurlEasy {
         unsafe {
             const CURLINFO_ACTIVESOCKET: c_int = 5242924;
             let mut sockfd: c_int = 0;
-            let res = curl_easy_getinfo(self.curl, CURLINFO_ACTIVESOCKET, &mut sockfd);
+            let res = curl_easy_getinfo(self.0, CURLINFO_ACTIVESOCKET, &mut sockfd);
             if res != CURLE_OK {
                 eprintln!("error: curl: {}", err_str!(res));
                 None
@@ -162,7 +150,7 @@ impl CurlEasy {
     pub fn send(&self, msg: &[u8]) -> Option<()> {
         unsafe {
             let mut sent: usize = 0;
-            let res = curl_easy_send(self.curl, msg.as_ptr(), msg.len(), &mut sent);
+            let res = curl_easy_send(self.0, msg.as_ptr(), msg.len(), &mut sent);
             if res != CURLE_OK {
                 eprintln!("error: curl: {}", err_str!(res));
                 return None;
@@ -173,27 +161,18 @@ impl CurlEasy {
         }
     }
 
-    pub fn recv(&mut self, buf: &mut Vec<u8>, sockfd: c_int) -> Option<()> {
-        const POLLIN:      c_short = 1;
+
+    pub fn recv(&mut self, buf: &mut [u8]) -> Option<RecvResult> {
         const CURLE_AGAIN: c_int   = 81;
         unsafe {
-            let mut p = Pollfd { fd: sockfd, events: POLLIN, revents: 0 };
-            if poll(&mut p, 1, -1) == -1 {
-                let err_str = CStr::from_ptr(strerror(*errno())).to_str().unwrap();
-                eprintln!("error: poll: {}", err_str);
-                return None;
-            }
-
-            loop {
-                let mut recv: usize = 0;
-                let res = curl_easy_recv(self.curl, self.recv_buf.as_mut_ptr(), self.recv_buf.len(), &mut recv);
-                match res {
-                    CURLE_AGAIN => { return Some(()) },
-                    CURLE_OK    => { buf.extend_from_slice(&self.recv_buf[..recv]); },
-                    _ => {
-                        eprintln!("error: curl: {}", err_str!(res));
-                        return None;
-                    }
+            let mut recv: usize = 0;
+            let res = curl_easy_recv(self.0, buf.as_mut_ptr(), buf.len(), &mut recv);
+            match res {
+                CURLE_OK    => Some(RecvResult::Ok(recv)),
+                CURLE_AGAIN => Some(RecvResult::Again),
+                _ => {
+                    eprintln!("error: curl: {}", err_str!(res));
+                    None
                 }
             }
         }
@@ -201,7 +180,7 @@ impl CurlEasy {
 
     pub fn perform(&self) -> Option<()> {
         unsafe {
-            let res = curl_easy_perform(self.curl);
+            let res = curl_easy_perform(self.0);
             if res != CURLE_OK {
                 eprintln!("error: curl: could not perform: {}", err_str!(res));
                 None
@@ -225,7 +204,7 @@ impl CurlEasy {
 impl Drop for CurlEasy {
     fn drop(&mut self) {
         unsafe {
-            curl_easy_cleanup(self.curl);
+            curl_easy_cleanup(self.0);
         }
     }
 }
