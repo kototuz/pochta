@@ -127,7 +127,6 @@ name = "pochta"
 version = "0.1.0"
 dependencies = [
  "base64",
- "nix",
  "rustyline",
  "tinyjson",
 ]
