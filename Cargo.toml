@@ -3,6 +3,10 @@ name = "pochta"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "make"
+path = "make.rs"
+
 [dependencies]
 tinyjson = "2.5.1"
 base64 = "0.22.1"

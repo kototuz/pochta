@@ -227,3 +227,4 @@ fn main() -> ExitCode {
 
 // TODO: Shortcut system
 // TODO: Integration with browsers (to open html) and editors (convenience)
+// TODO: Ability to store multiple clients?

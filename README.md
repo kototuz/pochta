@@ -17,20 +17,19 @@ K0001 OK [READ-WRITE] inbox selected. (Success)
 >> ...
 ```
 
-## Setup
-
-1. Create new project using [google developer console](https://console.developers.google.com/)
-2. Download oauth client info. There will be client id and client secret.
-3. In `Credentials` section select `WebClient` and add this redirect URI: `https://google.github.io/gmail-oauth2-tools/html/oauth2.dance.html`
-4. Using this [guide](https://github.com/google/gmail-oauth2-tools/wiki/OAuth2DotPyRunThrough) get refresh token
-
 ## Build
 
+Run "build script" and follow instructions.
+It will build an actual executable
 ```console
-CLIENT_ID="<value>" CLIENT_SECRET="<value>" REFRESH_TOKEN="<value>" EMAIL="your_email@example.com" cargo build
+$ cargo run --bin make
 ```
 
 ## Usage
+
+``` console
+$ ./target/release/pochta
+```
 
 In `pochta` you enter raw imap commands.
 You can learn about imap commands [here](https://www.rfc-editor.org/rfc/rfc3501)
