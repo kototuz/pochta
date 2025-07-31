@@ -119,7 +119,8 @@ fn get_new_auth_string() -> Option<String> {
     let curl = CurlEasy::init()?;
     curl.set_url(c"https://accounts.google.com/o/oauth2/token");
 
-    let mut params = curl.query_string(&[
+    let mut params = String::new();
+    curl.query_string(&mut params, &[
         ("client_id", CLIENT_ID),
         ("client_secret", CLIENT_SECRET),
         ("refresh_token", REFRESH_TOKEN),

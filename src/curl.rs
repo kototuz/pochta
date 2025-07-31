@@ -65,23 +65,21 @@ impl CurlEasy {
         }
     }
 
-    pub fn query_string(&self, params: &[(&str, &str)]) -> String {
-        let mut res = String::new();
+    pub fn query_string(&self, buf: &mut String, params: &[(&str, &str)]) {
         for param in params {
-            res.push_str(param.0);
-            res.push('=');
+            buf.push_str(param.0);
+            buf.push('=');
 
             unsafe {
                 let encoded = curl_easy_escape(self.0, param.1.as_ptr() as *const c_char, param.1.len() as c_int);
-                res.push_str(CStr::from_ptr(encoded).to_str().unwrap());
+                buf.push_str(CStr::from_ptr(encoded).to_str().unwrap());
                 curl_free(encoded as *mut c_void);
             }
 
-            res.push('&');
+            buf.push('&');
         }
 
-        res.pop();
-        res
+        buf.pop();
     }
 
 
