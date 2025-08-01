@@ -192,7 +192,7 @@ fn main2() -> Option<()> {
 
     // Main loop
     loop {
-        match rl.readline(">> ") {
+        match rl.readline(concat!(env!("PROMPT_COLOR"), ">> \x1b[0m")) {
             Ok(line) => {
                 if let Err(e) = rl.add_history_entry(&line) {
                     eprintln!("error: could not add entry to history: {e}");

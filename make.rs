@@ -33,11 +33,31 @@ fn main2() -> Option<()> {
     let mut flags = Flags::parse()?;
     let history_file_flag = flags.flag_bool("history-file", "Save commands to history file '~/.pochta/history.txt'", false)?;
     let help_flag = flags.flag_bool("help", "Print this help", false)?;
+    let mut prompt_color = flags.flag_str("prompt-color", "Set color of prompt: red|green|blue", "green")?;
     flags.check()?;
 
     if help_flag {
         flags.print_flags();
         return Some(());
+    }
+
+    match prompt_color.as_str() {
+        "red" => {
+            prompt_color.clear();
+            prompt_color.push_str("\x1b[31m")
+        },
+        "green" => {
+            prompt_color.clear();
+            prompt_color.push_str("\x1b[32m")
+        },
+        "blue" => {
+            prompt_color.clear();
+            prompt_color.push_str("\x1b[34m")
+        },
+        _ => {
+            eprintln!("error: invalid prompt color: {prompt_color}");
+            return None;
+        }
     }
 
     // Get the oauth client id and secret
@@ -108,6 +128,7 @@ fn main2() -> Option<()> {
     cmd.env("CLIENT_SECRET", &client_secret);
     cmd.env("REFRESH_TOKEN", &refresh_token);
     cmd.env("EMAIL", &email);
+    cmd.env("PROMPT_COLOR", &prompt_color);
 
     if history_file_flag {
         cmd.args(&["--features", "cmd_history_file"]);
