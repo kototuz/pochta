@@ -3,6 +3,9 @@ name = "pochta"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+cmd_history_file = []
+
 [[bin]]
 name = "make"
 path = "make.rs"

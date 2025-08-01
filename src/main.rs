@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::ffi::{c_int, c_char, c_short, CStr};
 use std::io::{Write, stdout};
 use std::process::ExitCode;
-use std::path::Path;
 
 mod curl;
 use curl::CurlEasy;
@@ -170,22 +169,25 @@ fn main2() -> Option<()> {
         }
     };
 
-    // Load history file. Create if it does not exist
-    let history_path = Path::new(concat!(env!("HOME"), "/.pochta/history.txt"));
-    match rl.load_history(history_path) {
-        Err(ReadlineError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!("info: history file does not exist - creating history file '~/.pochta/history.txt'");
-            if let Err(e) = std::fs::create_dir_all(history_path.parent().unwrap()) {
-                eprintln!("error: could not create history file: {e}");
-            }
-            if let Err(e) = std::fs::File::create(history_path) {
-                eprintln!("error: could not create history file: {e}");
-            }
-        },
-        Err(e) => {
-            eprintln!("error: could not load history: {e}");
-        },
-        _ => {}
+    #[cfg(feature = "cmd_history_file")]
+    { // Load history file. Create if it does not exist
+        use std::path::Path;
+        let history_path = Path::new(concat!(env!("HOME"), "/.pochta/history.txt"));
+        match rl.load_history(history_path) {
+            Err(ReadlineError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!("info: history file does not exist - creating history file '~/.pochta/history.txt'");
+                if let Err(e) = std::fs::create_dir_all(history_path.parent().unwrap()) {
+                    eprintln!("error: could not create history file: {e}");
+                }
+                if let Err(e) = std::fs::File::create(history_path) {
+                    eprintln!("error: could not create history file: {e}");
+                }
+            },
+            Err(e) => {
+                eprintln!("error: could not load history: {e}");
+            },
+            _ => {}
+        }
     }
 
     // Main loop
@@ -211,8 +213,11 @@ fn main2() -> Option<()> {
         }
     }
 
-    if let Err(e) = rl.save_history(history_path) {
-        eprintln!("error: could not append to history: {e}");
+    #[cfg(feature = "cmd_history_file")]
+    {
+        if let Err(e) = rl.save_history(history_path) {
+            eprintln!("error: could not append to history: {e}");
+        }
     }
 
     Some(())
