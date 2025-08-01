@@ -170,9 +170,12 @@ fn main2() -> Option<()> {
     };
 
     #[cfg(feature = "cmd_history_file")]
+    use std::path::Path;
+    #[cfg(feature = "cmd_history_file")]
+    let history_path = Path::new(concat!(env!("HOME"), "/.pochta/history.txt"));
+
+    #[cfg(feature = "cmd_history_file")]
     { // Load history file. Create if it does not exist
-        use std::path::Path;
-        let history_path = Path::new(concat!(env!("HOME"), "/.pochta/history.txt"));
         match rl.load_history(history_path) {
             Err(ReadlineError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 println!("info: history file does not exist - creating history file '~/.pochta/history.txt'");
