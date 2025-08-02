@@ -21,7 +21,7 @@ const CLIENT_SECRET: &str = env!("CLIENT_SECRET");
 const REFRESH_TOKEN: &str = env!("REFRESH_TOKEN");
 const USER:          &str = env!("EMAIL");
 
-struct GmailClient {
+struct GmailImapClient {
     curl:     CurlEasy,
     tag:      u32,
     sockfd:   c_int,
@@ -44,7 +44,7 @@ unsafe extern "C" {
     fn poll(pollfds: *mut Pollfd, count: u64, timeout: c_int) -> c_int;
 }
 
-impl GmailClient {
+impl GmailImapClient {
     fn connect() -> Option<Self> {
         let curl = CurlEasy::init()?;
         curl.set_url(c"imaps://imap.gmail.com:993")?;
@@ -99,6 +99,8 @@ impl GmailClient {
         Some(())
     }
 
+    // TODO: Tag is used for parallelization. We don't use this feature.
+    //       Thus we may not generate new tag every command
     fn send_cmd(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
         resp.clear();
         let tag = format!("K{:04}", self.tag);
@@ -214,7 +216,7 @@ fn main2() -> Option<()> {
     }
 
     let auth_string = get_new_auth_string()?;
-    let mut gmail = GmailClient::connect()?;
+    let mut gmail = GmailImapClient::connect()?;
     let mut resp = Vec::<u8>::new();
     let mut stdout = stdout();
 
