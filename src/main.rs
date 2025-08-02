@@ -2,10 +2,14 @@ use std::collections::HashMap;
 use std::ffi::{c_int, c_char, c_short, CStr};
 use std::io::{Write, stdout};
 use std::process::ExitCode;
+use std::path::Path;
 
 mod curl;
 use curl::CurlEasy;
 use curl::RecvResult;
+
+mod flag;
+use flag::Flags;
 
 use tinyjson::JsonValue;
 use base64::prelude::*;
@@ -149,6 +153,66 @@ fn get_new_auth_string() -> Option<String> {
 }
 
 fn main2() -> Option<()> {
+    // Parse command line flags
+    let mut flags = Flags::parse()?;
+    let history_file_flag = flags.flag_bool("history-file", "Save commands to history file '~/.pochta/history.txt'", false)?;
+    let help_flag = flags.flag_bool("help", "Print this help", false)?;
+    let mut prompt_color = flags.flag_str("prompt-color", "Set color of prompt: red|green|blue", "green")?;
+    flags.check()?;
+
+    if help_flag {
+        flags.print_flags();
+        return Some(());
+    }
+
+    // Convert color name to escape sequence
+    match prompt_color.as_str() {
+        "red" => {
+            prompt_color.clear();
+            prompt_color.push_str("\x1b[31m")
+        },
+        "green" => {
+            prompt_color.clear();
+            prompt_color.push_str("\x1b[32m")
+        },
+        "blue" => {
+            prompt_color.clear();
+            prompt_color.push_str("\x1b[34m")
+        },
+        _ => {
+            eprintln!("error: invalid prompt color: {prompt_color}");
+            return None;
+        }
+    }
+
+    let mut load_history: fn(rl: &mut rustyline::DefaultEditor, path: &Path) = |_,_| {};
+    let mut save_history: fn(rl: &mut rustyline::DefaultEditor, path: &Path) = |_,_| {};
+    if history_file_flag {
+        load_history = |rl, path| {
+            match rl.load_history(path) {
+                Err(ReadlineError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    println!("info: history file does not exist - creating history file '~/.pochta/history.txt'");
+                    if let Err(e) = std::fs::create_dir_all(path.parent().unwrap()) {
+                        eprintln!("error: could not create history file: {e}");
+                    }
+                    if let Err(e) = std::fs::File::create(path) {
+                        eprintln!("error: could not create history file: {e}");
+                    }
+                },
+                Err(e) => {
+                    eprintln!("error: could not load history: {e}");
+                },
+                _ => {}
+            }
+        };
+
+        save_history = |rl, path| {
+            if let Err(e) = rl.save_history(path) {
+                eprintln!("error: could not append to history: {e}");
+            }
+        };
+    }
+
     let auth_string = get_new_auth_string()?;
     let mut gmail = GmailClient::connect()?;
     let mut resp = Vec::<u8>::new();
@@ -169,33 +233,12 @@ fn main2() -> Option<()> {
         }
     };
 
-    #[cfg(feature = "cmd_history_file")]
-    use std::path::Path;
-    #[cfg(feature = "cmd_history_file")]
     let history_path = Path::new(concat!(env!("HOME"), "/.pochta/history.txt"));
-
-    #[cfg(feature = "cmd_history_file")]
-    { // Load history file. Create if it does not exist
-        match rl.load_history(history_path) {
-            Err(ReadlineError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                println!("info: history file does not exist - creating history file '~/.pochta/history.txt'");
-                if let Err(e) = std::fs::create_dir_all(history_path.parent().unwrap()) {
-                    eprintln!("error: could not create history file: {e}");
-                }
-                if let Err(e) = std::fs::File::create(history_path) {
-                    eprintln!("error: could not create history file: {e}");
-                }
-            },
-            Err(e) => {
-                eprintln!("error: could not load history: {e}");
-            },
-            _ => {}
-        }
-    }
+    load_history(&mut rl, &history_path);
 
     // Main loop
     loop {
-        match rl.readline(concat!(env!("PROMPT_COLOR"), ">> \x1b[0m")) {
+        match rl.readline(&format!("{prompt_color}>> \x1b[0m")) {
             Ok(line) => {
                 if let Err(e) = rl.add_history_entry(&line) {
                     eprintln!("error: could not add entry to history: {e}");
@@ -216,12 +259,7 @@ fn main2() -> Option<()> {
         }
     }
 
-    #[cfg(feature = "cmd_history_file")]
-    {
-        if let Err(e) = rl.save_history(history_path) {
-            eprintln!("error: could not append to history: {e}");
-        }
-    }
+    save_history(&mut rl, &history_path);
 
     Some(())
 }

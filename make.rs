@@ -11,10 +11,6 @@ use std::process::Command;
 mod curl;
 use curl::CurlEasy;
 
-#[path = "src/flag.rs"]
-mod flag;
-use flag::Flags;
-
 use tinyjson::JsonValue;
 
 const REDIRECT_URI: &str =  "https://google.github.io/gmail-oauth2-tools/html/oauth2.dance.html";
@@ -29,37 +25,6 @@ fn input(prompt: &str, buf: &mut String) {
 }
 
 fn main2() -> Option<()> {
-    // Parse command line flags
-    let mut flags = Flags::parse()?;
-    let history_file_flag = flags.flag_bool("history-file", "Save commands to history file '~/.pochta/history.txt'", false)?;
-    let help_flag = flags.flag_bool("help", "Print this help", false)?;
-    let mut prompt_color = flags.flag_str("prompt-color", "Set color of prompt: red|green|blue", "green")?;
-    flags.check()?;
-
-    if help_flag {
-        flags.print_flags();
-        return Some(());
-    }
-
-    match prompt_color.as_str() {
-        "red" => {
-            prompt_color.clear();
-            prompt_color.push_str("\x1b[31m")
-        },
-        "green" => {
-            prompt_color.clear();
-            prompt_color.push_str("\x1b[32m")
-        },
-        "blue" => {
-            prompt_color.clear();
-            prompt_color.push_str("\x1b[34m")
-        },
-        _ => {
-            eprintln!("error: invalid prompt color: {prompt_color}");
-            return None;
-        }
-    }
-
     // Get the oauth client id and secret
     let mut client_id = String::new();
     let mut client_secret = String::new();
@@ -122,19 +87,13 @@ fn main2() -> Option<()> {
     input("8. Enter your gmail address: ", &mut email);
 
     // Build the program
-    let mut cmd = Command::new("cargo");
-    cmd.args(&["build", "--release", "--bin", "pochta"]);
-    cmd.env("CLIENT_ID", &client_id);
-    cmd.env("CLIENT_SECRET", &client_secret);
-    cmd.env("REFRESH_TOKEN", &refresh_token);
-    cmd.env("EMAIL", &email);
-    cmd.env("PROMPT_COLOR", &prompt_color);
-
-    if history_file_flag {
-        cmd.args(&["--features", "cmd_history_file"]);
-    }
-
-    cmd.status().expect("pochta build failed");
+    Command::new("cargo")
+        .args(&["build", "--release", "--bin", "pochta"])
+        .env("CLIENT_ID", &client_id)
+        .env("CLIENT_SECRET", &client_secret)
+        .env("REFRESH_TOKEN", &refresh_token)
+        .env("EMAIL", &email)
+        .status().expect("pochta build failed");
 
     Some(())
 }
