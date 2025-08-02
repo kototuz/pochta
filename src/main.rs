@@ -22,7 +22,36 @@ const CLIENT_SECRET: &str = env!("CLIENT_SECRET");
 const REFRESH_TOKEN: &str = env!("REFRESH_TOKEN");
 const USER:          &str = env!("EMAIL");
 
-struct ImapSmtpClient {
+trait Client {
+    fn send_cmd(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()>;
+    fn send_quit_cmd(&mut self, resp: &mut Vec<u8>) -> Option<()>;
+    fn send_cmd_not_wait_resp(&mut self, cmd: &str) -> Option<()>;
+    fn recv_all(&mut self, buf: &mut Vec<u8>) -> Option<()>;
+    fn sockfd(&self) -> c_int;
+    fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()>;
+
+    fn wait_for_input(&self) -> Option<()> {
+        const POLLIN: c_short = 1;
+        let mut p = Pollfd { fd: self.sockfd(), events: POLLIN, revents: 0 };
+        unsafe {
+            if poll(&mut p, 1, -1) == -1 {
+                let err_str = CStr::from_ptr(strerror(*errno())).to_str().unwrap();
+                eprintln!("error: poll: {}", err_str);
+                None
+            } else {
+                Some(())
+            }
+        }
+    }
+}
+
+struct ImapClient {
+    curl:     CurlEasy,
+    sockfd:   c_int,
+    resp_buf: [u8; 1024]
+}
+
+struct SmtpClient {
     curl:     CurlEasy,
     sockfd:   c_int,
     resp_buf: [u8; 1024]
@@ -44,12 +73,12 @@ unsafe extern "C" {
     fn poll(pollfds: *mut Pollfd, count: u64, timeout: c_int) -> c_int;
 }
 
-impl ImapSmtpClient {
+impl ImapClient {
     const TAG: &[u8] = b"POCHTA ";
 
-    fn connect(addr: &CStr) -> Option<Self> {
+    fn connect() -> Option<Self> {
         let curl = CurlEasy::init()?;
-        curl.set_url(addr)?;
+        curl.set_url(c"imaps://imap.gmail.com:993")?;
         curl.set_connect_only()?;
         curl.perform()?;
         Some(Self {
@@ -58,22 +87,23 @@ impl ImapSmtpClient {
             resp_buf: [0u8; 1024],
         })
     }
+}
 
-    fn wait_for_input(&self) -> Option<()> {
-        const POLLIN: c_short = 1;
-        let mut p = Pollfd { fd: self.sockfd, events: POLLIN, revents: 0 };
-        unsafe {
-            if poll(&mut p, 1, -1) == -1 {
-                let err_str = CStr::from_ptr(strerror(*errno())).to_str().unwrap();
-                eprintln!("error: poll: {}", err_str);
-                None
-            } else {
-                Some(())
-            }
-        }
+impl Client for ImapClient {
+    fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()> {
+        self.send_cmd("AUTHENTICATE XOAUTH2", resp)?;
+        assert!(resp.starts_with(b"+"));
+        self.curl.send(&auth_string.as_bytes())?;
+        self.curl.send(b"\r\n")?;
+        self.recv_all(resp)?;
+        Some(())
     }
 
-    fn recv_all_imap(&mut self, buf: &mut Vec<u8>) -> Option<()> {
+    fn sockfd(&self) -> c_int {
+        self.sockfd
+    }
+
+    fn recv_all(&mut self, buf: &mut Vec<u8>) -> Option<()> {
         buf.clear();
         self.wait_for_input()?;
         loop {
@@ -101,7 +131,52 @@ impl ImapSmtpClient {
         Some(())
     }
 
-    fn recv_all_smtp(&mut self, buf: &mut Vec<u8>) -> Option<()> {
+    fn send_cmd(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
+        self.curl.send(Self::TAG)?;
+        self.curl.send(&cmd.as_bytes())?;
+        self.curl.send(b"\r\n")?;
+        self.recv_all(resp)?;
+        Some(())
+    }
+
+    fn send_cmd_not_wait_resp(&mut self, cmd: &str) -> Option<()> {
+        self.curl.send(Self::TAG)?;
+        self.curl.send(&cmd.as_bytes())?;
+        self.curl.send(b"\r\n")?;
+        Some(())
+    }
+
+    fn send_quit_cmd(&mut self, resp: &mut Vec<u8>) -> Option<()> {
+        self.send_cmd("LOGOUT", resp)?;
+        Some(())
+    }
+}
+
+impl SmtpClient {
+    fn connect() -> Option<Self> {
+        let curl = CurlEasy::init()?;
+        curl.set_url(c"smtps://smtp.gmail.com:465")?;
+        curl.set_connect_only()?;
+        curl.perform()?;
+        Some(Self {
+            sockfd:   curl.get_sockfd()?,
+            curl:     curl,
+            resp_buf: [0u8; 1024],
+        })
+    }
+}
+
+impl Client for SmtpClient {
+    fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()> {
+        self.send_cmd(&format!("AUTH XOAUTH2 {auth_string}"), resp)?;
+        Some(())
+    }
+
+    fn sockfd(&self) -> c_int {
+        self.sockfd
+    }
+
+    fn recv_all(&mut self, buf: &mut Vec<u8>) -> Option<()> {
         buf.clear();
         self.wait_for_input()?;
         loop {
@@ -133,38 +208,21 @@ impl ImapSmtpClient {
         Some(())
     }
 
-    fn send_cmd_imap(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
-        self.curl.send(Self::TAG)?;
+    fn send_cmd(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
         self.curl.send(&cmd.as_bytes())?;
         self.curl.send(b"\r\n")?;
-        self.recv_all_imap(resp)?;
+        self.recv_all(resp)?;
         Some(())
     }
 
-    fn send_cmd_smtp(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
-        self.curl.send(&cmd.as_bytes())?;
-        self.curl.send(b"\r\n")?;
-        self.recv_all_smtp(resp)?;
-        Some(())
-    }
-
-    fn send_cmd_not_wait_resp_imap(&mut self, cmd: &str) -> Option<()> {
-        self.curl.send(Self::TAG)?;
+    fn send_cmd_not_wait_resp(&mut self, cmd: &str) -> Option<()> {
         self.curl.send(&cmd.as_bytes())?;
         self.curl.send(b"\r\n")?;
         Some(())
     }
 
-    fn send_cmd_not_wait_resp_smtp(&mut self, cmd: &str) -> Option<()> {
-        self.curl.send(&cmd.as_bytes())?;
-        self.curl.send(b"\r\n")?;
-        Some(())
-    }
-
-    fn send_raw_lit_imap(&mut self, lit: &[u8], resp: &mut Vec<u8>) -> Option<()> {
-        self.curl.send(lit)?;
-        self.curl.send(b"\r\n")?;
-        self.recv_all_imap(resp)?;
+    fn send_quit_cmd(&mut self, resp: &mut Vec<u8>) -> Option<()> {
+        self.send_cmd("QUIT", resp)?;
         Some(())
     }
 }
@@ -278,36 +336,18 @@ usage:
         };
     }
 
-    // Connect to smtp server if flag is true, imap server otherwise
-    // And authenticate using google xoauth2
-    let auth_string = get_new_auth_string()?;
+    let client: &mut dyn Client = if smtp_flag {
+        &mut SmtpClient::connect()?
+    } else {
+        &mut ImapClient::connect()?
+    };
+
+    // Authenticate
     let mut server_resp = Vec::<u8>::new();
     let mut stdout = stdout();
-    let mut client: ImapSmtpClient;
-    let send_cmd: fn(&mut ImapSmtpClient, &str, &mut Vec<u8>) -> Option<()>;
-    let send_cmd_not_wait_resp: fn(&mut ImapSmtpClient, &str) -> Option<()>;
-    let recv_all: fn(&mut ImapSmtpClient, &mut Vec<u8>) -> Option<()>;
-    let quit_cmd: &str;
-    if smtp_flag {
-        client = ImapSmtpClient::connect(c"smtps://smtp.gmail.com:465")?;
-        client.send_cmd_smtp(&format!("AUTH XOAUTH2 {auth_string}"), &mut server_resp)?;
-        stdout.write_all(&server_resp).unwrap();
-        println!("warning: smtp command 'data' cannot be used right now");
-        send_cmd = ImapSmtpClient::send_cmd_smtp;
-        quit_cmd = "QUIT";
-        send_cmd_not_wait_resp = ImapSmtpClient::send_cmd_not_wait_resp_smtp;
-        recv_all = ImapSmtpClient::recv_all_smtp;
-    } else {
-        client = ImapSmtpClient::connect(c"imaps://imap.gmail.com:993")?;
-        client.send_cmd_imap("AUTHENTICATE XOAUTH2", &mut server_resp)?;
-        assert!(server_resp.starts_with(b"+"));
-        client.send_raw_lit_imap(&auth_string.as_bytes(), &mut server_resp)?;
-        stdout.write_all(&server_resp).unwrap();
-        send_cmd = ImapSmtpClient::send_cmd_imap;
-        quit_cmd = "LOGOUT";
-        send_cmd_not_wait_resp = ImapSmtpClient::send_cmd_not_wait_resp_imap;
-        recv_all = ImapSmtpClient::recv_all_imap;
-    }
+    let auth_string = get_new_auth_string()?;
+    client.auth(&auth_string, &mut server_resp)?;
+    stdout.write_all(&server_resp).unwrap();
 
     // Init rustyline
     let mut rl = match rustyline::DefaultEditor::new() {
@@ -334,22 +374,22 @@ usage:
                 if multiline_mode {
                     if bytes.len() == 1 && bytes[0] == b'"' {
                         multiline_mode = false;
-                        recv_all(&mut client, &mut server_resp)?;
+                        client.recv_all(&mut server_resp)?;
                         stdout.write_all(&server_resp).unwrap();
                     } else {
-                        send_cmd_not_wait_resp(&mut client, &line)?;
+                        client.send_cmd_not_wait_resp(&line)?;
                     }
                 } else {
                     if bytes.len() == 1 && bytes[0] == b'"' {
                         multiline_mode = true;
                     } else {
-                        send_cmd(&mut client, &line, &mut server_resp)?;
+                        client.send_cmd(&line, &mut server_resp)?;
                         stdout.write_all(&server_resp).unwrap();
                     }
                 }
             },
             Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
-                send_cmd(&mut client, quit_cmd, &mut server_resp)?;
+                client.send_quit_cmd(&mut server_resp);
                 stdout.write_all(&server_resp).unwrap();
                 break;
             },
@@ -372,7 +412,6 @@ fn main() -> ExitCode {
     }
 }
 
-// TODO: ImapSmtpClient set functions internally
 // TODO: Shortcut system
 // TODO: Integration with browsers (to open html) and editors (convenience)
 // TODO: Ability to store multiple clients?
