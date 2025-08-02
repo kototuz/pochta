@@ -29,6 +29,7 @@ trait Client {
     fn recv_all(&mut self, buf: &mut Vec<u8>) -> Option<()>;
     fn sockfd(&self) -> c_int;
     fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()>;
+    fn prompt_str(&self) -> &'static str;
 
     fn wait_for_input(&self) -> Option<()> {
         const POLLIN: c_short = 1;
@@ -90,6 +91,10 @@ impl ImapClient {
 }
 
 impl Client for ImapClient {
+    fn prompt_str(&self) -> &'static str {
+        "imap> "
+    }
+
     fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()> {
         self.send_cmd("AUTHENTICATE XOAUTH2", resp)?;
         assert!(resp.starts_with(b"+"));
@@ -167,6 +172,10 @@ impl SmtpClient {
 }
 
 impl Client for SmtpClient {
+    fn prompt_str(&self) -> &'static str {
+        "smtp> "
+    }
+
     fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()> {
         self.send_cmd(&format!("AUTH XOAUTH2 {auth_string}"), resp)?;
         Some(())
@@ -362,9 +371,12 @@ usage:
     load_history(&mut rl, &history_path);
 
     // Main loop
+    let default_prompt = format!("{prompt_color}{}\x1b[0m", client.prompt_str());
+    let multiline_prompt = format!("{prompt_color}> \x1b[0m");
+    let mut curr_prompt = &default_prompt;
     let mut multiline_mode = false;
     loop {
-        match rl.readline(&format!("{prompt_color}>> \x1b[0m")) {
+        match rl.readline(curr_prompt) {
             Ok(line) => {
                 if let Err(e) = rl.add_history_entry(&line) {
                     eprintln!("error: could not add entry to history: {e}");
@@ -374,6 +386,7 @@ usage:
                 if multiline_mode {
                     if bytes.len() == 1 && bytes[0] == b'"' {
                         multiline_mode = false;
+                        curr_prompt = &default_prompt;
                         client.recv_all(&mut server_resp)?;
                         stdout.write_all(&server_resp).unwrap();
                     } else {
@@ -382,6 +395,7 @@ usage:
                 } else {
                     if bytes.len() == 1 && bytes[0] == b'"' {
                         multiline_mode = true;
+                        curr_prompt = &multiline_prompt;
                     } else {
                         client.send_cmd(&line, &mut server_resp)?;
                         stdout.write_all(&server_resp).unwrap();
