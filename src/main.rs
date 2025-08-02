@@ -148,6 +148,19 @@ impl ImapSmtpClient {
         Some(())
     }
 
+    fn send_cmd_not_wait_resp_imap(&mut self, cmd: &str) -> Option<()> {
+        self.curl.send(Self::TAG)?;
+        self.curl.send(&cmd.as_bytes())?;
+        self.curl.send(b"\r\n")?;
+        Some(())
+    }
+
+    fn send_cmd_not_wait_resp_smtp(&mut self, cmd: &str) -> Option<()> {
+        self.curl.send(&cmd.as_bytes())?;
+        self.curl.send(b"\r\n")?;
+        Some(())
+    }
+
     fn send_raw_lit_imap(&mut self, lit: &[u8], resp: &mut Vec<u8>) -> Option<()> {
         self.curl.send(lit)?;
         self.curl.send(b"\r\n")?;
@@ -259,6 +272,8 @@ fn main2() -> Option<()> {
     let mut stdout = stdout();
     let mut client: ImapSmtpClient;
     let send_cmd: fn(&mut ImapSmtpClient, &str, &mut Vec<u8>) -> Option<()>;
+    let send_cmd_not_wait_resp: fn(&mut ImapSmtpClient, &str) -> Option<()>;
+    let recv_all: fn(&mut ImapSmtpClient, &mut Vec<u8>) -> Option<()>;
     let quit_cmd: &str;
     if smtp_flag {
         client = ImapSmtpClient::connect(c"smtps://smtp.gmail.com:465")?;
@@ -267,6 +282,8 @@ fn main2() -> Option<()> {
         println!("warning: smtp command 'data' cannot be used right now");
         send_cmd = ImapSmtpClient::send_cmd_smtp;
         quit_cmd = "QUIT";
+        send_cmd_not_wait_resp = ImapSmtpClient::send_cmd_not_wait_resp_smtp;
+        recv_all = ImapSmtpClient::recv_all_smtp;
     } else {
         client = ImapSmtpClient::connect(c"imaps://imap.gmail.com:993")?;
         client.send_cmd_imap("AUTHENTICATE XOAUTH2", &mut server_resp)?;
@@ -275,6 +292,8 @@ fn main2() -> Option<()> {
         stdout.write_all(&server_resp).unwrap();
         send_cmd = ImapSmtpClient::send_cmd_imap;
         quit_cmd = "LOGOUT";
+        send_cmd_not_wait_resp = ImapSmtpClient::send_cmd_not_wait_resp_imap;
+        recv_all = ImapSmtpClient::recv_all_imap;
     }
 
     // Init rustyline
@@ -290,6 +309,7 @@ fn main2() -> Option<()> {
     load_history(&mut rl, &history_path);
 
     // Main loop
+    let mut multiline_mode = false;
     loop {
         match rl.readline(&format!("{prompt_color}>> \x1b[0m")) {
             Ok(line) => {
@@ -297,8 +317,23 @@ fn main2() -> Option<()> {
                     eprintln!("error: could not add entry to history: {e}");
                 }
 
-                send_cmd(&mut client, &line, &mut server_resp)?;
-                stdout.write_all(&server_resp).unwrap();
+                let bytes = line.as_bytes();
+                if multiline_mode {
+                    if bytes.len() == 1 && bytes[0] == b'"' {
+                        multiline_mode = false;
+                        recv_all(&mut client, &mut server_resp)?;
+                        stdout.write_all(&server_resp).unwrap();
+                    } else {
+                        send_cmd_not_wait_resp(&mut client, &line)?;
+                    }
+                } else {
+                    if bytes.len() == 1 && bytes[0] == b'"' {
+                        multiline_mode = true;
+                    } else {
+                        send_cmd(&mut client, &line, &mut server_resp)?;
+                        stdout.write_all(&server_resp).unwrap();
+                    }
+                }
             },
             Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
                 send_cmd(&mut client, quit_cmd, &mut server_resp)?;
@@ -324,6 +359,7 @@ fn main() -> ExitCode {
     }
 }
 
+// TODO: ImapSmtpClient set functions internally
 // TODO: Shortcut system
 // TODO: Integration with browsers (to open html) and editors (convenience)
 // TODO: Ability to store multiple clients?
