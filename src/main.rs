@@ -214,6 +214,19 @@ fn main2() -> Option<()> {
 
     if help_flag {
         flags.print_flags();
+        print!("
+usage:
+    Send single command:
+        >> select inbox
+        <response>
+
+    Send several commands at once (it's useful for writing mail):
+        >> \"
+        >> noop
+        >> noop
+        >> \"
+        <response>
+");
         return Some(());
     }
     
