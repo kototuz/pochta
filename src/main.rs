@@ -284,14 +284,14 @@ fn main2() -> Option<()> {
         print!("
 usage:
     Send single command:
-        >> select inbox
+        imap>> select inbox
         <response>
 
     Send several commands at once (it's useful for writing mail):
-        >> \"
-        >> noop
-        >> noop
-        >> \"
+        imap>> \"
+        > noop
+        > noop
+        > \"
         <response>
 ");
         return Some(());
@@ -403,7 +403,7 @@ usage:
                 }
             },
             Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
-                client.send_quit_cmd(&mut server_resp);
+                client.send_quit_cmd(&mut server_resp)?;
                 stdout.write_all(&server_resp).unwrap();
                 break;
             },
