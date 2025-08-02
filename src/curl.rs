@@ -15,6 +15,7 @@ enum CurlOption {
     WriteFunction = 20011,
     WriteData     = 10001,
     ConnectOnly   = 141,
+    Verbose       = 41,
 }
 
 type CurlCode = c_int;
@@ -141,6 +142,18 @@ impl CurlEasy {
                 None
             } else {
                 Some(sockfd)
+            }
+        }
+    }
+
+    pub fn set_verbose(&self) -> Option<()> {
+        unsafe {
+            let res = curl_easy_setopt(self.0, CurlOption::Verbose, 1);
+            if res != CURLE_OK {
+                eprintln!("error: curl: {}", err_str!(res));
+                None
+            } else {
+                Some(())
             }
         }
     }

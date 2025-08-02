@@ -4,6 +4,7 @@ use std::io::{Write, stdout};
 use std::process::ExitCode;
 use std::path::Path;
 
+#[allow(unused)]
 mod curl;
 use curl::CurlEasy;
 use curl::RecvResult;
@@ -21,7 +22,7 @@ const CLIENT_SECRET: &str = env!("CLIENT_SECRET");
 const REFRESH_TOKEN: &str = env!("REFRESH_TOKEN");
 const USER:          &str = env!("EMAIL");
 
-struct GmailImapClient {
+struct ImapSmtpClient {
     curl:     CurlEasy,
     sockfd:   c_int,
     resp_buf: [u8; 1024]
@@ -43,12 +44,12 @@ unsafe extern "C" {
     fn poll(pollfds: *mut Pollfd, count: u64, timeout: c_int) -> c_int;
 }
 
-impl GmailImapClient {
+impl ImapSmtpClient {
     const TAG: &[u8] = b"POCHTA ";
 
-    fn connect() -> Option<Self> {
+    fn connect(addr: &CStr) -> Option<Self> {
         let curl = CurlEasy::init()?;
-        curl.set_url(c"imaps://imap.gmail.com:993")?;
+        curl.set_url(addr)?;
         curl.set_connect_only()?;
         curl.perform()?;
         Some(Self {
@@ -72,7 +73,7 @@ impl GmailImapClient {
         }
     }
 
-    fn recv_all(&mut self, buf: &mut Vec<u8>) -> Option<()> {
+    fn recv_all_imap(&mut self, buf: &mut Vec<u8>) -> Option<()> {
         self.wait_for_input()?;
         loop {
             match self.curl.recv(&mut self.resp_buf)? {
@@ -99,20 +100,59 @@ impl GmailImapClient {
         Some(())
     }
 
-    fn send_cmd(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
+    fn recv_all_smtp(&mut self, buf: &mut Vec<u8>) -> Option<()> {
+        self.wait_for_input()?;
+        loop {
+            match self.curl.recv(&mut self.resp_buf)? {
+                RecvResult::Ok(recv) => buf.extend_from_slice(&self.resp_buf[..recv]),
+                RecvResult::Again => {
+                    if buf.ends_with(b"\r\n") {
+                        let last_str_begin = buf.iter()
+                            .take(buf.len() - 2)
+                            .rposition(|s| *s == b'\n')
+                            .map(|pos| pos+1)
+                            .unwrap_or(0);
+
+                        let last_str = &buf[last_str_begin..];
+                        assert!(last_str[0].is_ascii_digit());
+                        assert!(last_str[1].is_ascii_digit());
+                        assert!(last_str[2].is_ascii_digit());
+
+                        if last_str[3] == b' ' {
+                            break;
+                        }
+                    }
+
+                    self.wait_for_input()?;
+                }
+            }
+        }
+
+        Some(())
+    }
+
+    fn send_cmd_imap(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
         resp.clear();
         self.curl.send(Self::TAG)?;
         self.curl.send(&cmd.as_bytes())?;
         self.curl.send(b"\r\n")?;
-        self.recv_all(resp)?;
+        self.recv_all_imap(resp)?;
         Some(())
     }
 
-    fn send_raw_lit(&mut self, lit: &[u8], resp: &mut Vec<u8>) -> Option<()> {
+    fn send_cmd_smtp(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
+        resp.clear();
+        self.curl.send(&cmd.as_bytes())?;
+        self.curl.send(b"\r\n")?;
+        self.recv_all_smtp(resp)?;
+        Some(())
+    }
+
+    fn send_raw_lit_imap(&mut self, lit: &[u8], resp: &mut Vec<u8>) -> Option<()> {
         resp.clear();
         self.curl.send(lit)?;
         self.curl.send(b"\r\n")?;
-        self.recv_all(resp)?;
+        self.recv_all_imap(resp)?;
         Some(())
     }
 }
@@ -156,6 +196,7 @@ fn main2() -> Option<()> {
     let mut flags = Flags::parse()?;
     let history_file_flag = flags.flag_bool("history-file", "Save commands to history file '~/.pochta/history.txt'", false)?;
     let help_flag = flags.flag_bool("help", "Print this help", false)?;
+    let smtp_flag = flags.flag_bool("smtp", "Connect to SMTP server (send emails) instead of IMAP (retrieve emails)", false)?;
     let mut prompt_color = flags.flag_str("prompt-color", "Set color of prompt: red|green|blue", "green")?;
     flags.check()?;
 
@@ -163,7 +204,7 @@ fn main2() -> Option<()> {
         flags.print_flags();
         return Some(());
     }
-
+    
     // Convert color name to escape sequence
     match prompt_color.as_str() {
         "red" => {
@@ -212,16 +253,30 @@ fn main2() -> Option<()> {
         };
     }
 
+    // Connect to smtp server if flag is true, imap server otherwise
+    // And authenticate using google xoauth2
     let auth_string = get_new_auth_string()?;
-    let mut gmail = GmailImapClient::connect()?;
-    let mut resp = Vec::<u8>::new();
+    let mut server_resp = Vec::<u8>::new();
     let mut stdout = stdout();
-
-    // Authenticate using google xoauth2
-    gmail.send_cmd("AUTHENTICATE XOAUTH2", &mut resp)?;
-    assert!(resp.starts_with(b"+"));
-    gmail.send_raw_lit(&auth_string.as_bytes(), &mut resp)?;
-    stdout.write_all(&resp).unwrap();
+    let mut client: ImapSmtpClient;
+    let send_cmd: fn(&mut ImapSmtpClient, &str, &mut Vec<u8>) -> Option<()>;
+    let quit_cmd: &str;
+    if smtp_flag {
+        client = ImapSmtpClient::connect(c"smtps://smtp.gmail.com:465")?;
+        client.send_cmd_smtp(&format!("AUTH XOAUTH2 {auth_string}"), &mut server_resp)?;
+        stdout.write_all(&server_resp).unwrap();
+        println!("warning: smtp command 'data' cannot be used right now");
+        send_cmd = ImapSmtpClient::send_cmd_smtp;
+        quit_cmd = "QUIT";
+    } else {
+        client = ImapSmtpClient::connect(c"imaps://imap.gmail.com:993")?;
+        client.send_cmd_imap("AUTHENTICATE XOAUTH2", &mut server_resp)?;
+        assert!(server_resp.starts_with(b"+"));
+        client.send_raw_lit_imap(&auth_string.as_bytes(), &mut server_resp)?;
+        stdout.write_all(&server_resp).unwrap();
+        send_cmd = ImapSmtpClient::send_cmd_imap;
+        quit_cmd = "LOGOUT";
+    }
 
     // Init rustyline
     let mut rl = match rustyline::DefaultEditor::new() {
@@ -243,12 +298,12 @@ fn main2() -> Option<()> {
                     eprintln!("error: could not add entry to history: {e}");
                 }
 
-                gmail.send_cmd(&line, &mut resp)?;
-                stdout.write_all(&resp).unwrap();
+                send_cmd(&mut client, &line, &mut server_resp)?;
+                stdout.write_all(&server_resp).unwrap();
             },
             Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
-                gmail.send_cmd("LOGOUT", &mut resp)?;
-                stdout.write_all(&resp).unwrap();
+                send_cmd(&mut client, quit_cmd, &mut server_resp)?;
+                stdout.write_all(&server_resp).unwrap();
                 break;
             },
             Err(err) => {
