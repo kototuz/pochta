@@ -23,7 +23,6 @@ const USER:          &str = env!("EMAIL");
 
 struct GmailImapClient {
     curl:     CurlEasy,
-    tag:      u32,
     sockfd:   c_int,
     resp_buf: [u8; 1024]
 }
@@ -45,6 +44,8 @@ unsafe extern "C" {
 }
 
 impl GmailImapClient {
+    const TAG: &[u8] = b"POCHTA ";
+
     fn connect() -> Option<Self> {
         let curl = CurlEasy::init()?;
         curl.set_url(c"imaps://imap.gmail.com:993")?;
@@ -53,7 +54,6 @@ impl GmailImapClient {
         Some(Self {
             sockfd:   curl.get_sockfd()?,
             curl:     curl,
-            tag:      0,
             resp_buf: [0u8; 1024],
         })
     }
@@ -72,7 +72,7 @@ impl GmailImapClient {
         }
     }
 
-    fn recv_all(&mut self, buf: &mut Vec<u8>, tag: &[u8]) -> Option<()> {
+    fn recv_all(&mut self, buf: &mut Vec<u8>) -> Option<()> {
         self.wait_for_input()?;
         loop {
             match self.curl.recv(&mut self.resp_buf)? {
@@ -86,7 +86,7 @@ impl GmailImapClient {
                             .unwrap_or(0);
 
                         let last_str = &buf[last_str_begin..];
-                        if last_str.starts_with(tag) || last_str.starts_with(b"+") {
+                        if last_str.starts_with(Self::TAG) || last_str.starts_with(b"+") {
                             break;
                         }
                     }
@@ -99,14 +99,12 @@ impl GmailImapClient {
         Some(())
     }
 
-    // TODO: Tag is used for parallelization. We don't use this feature.
-    //       Thus we may not generate new tag every command
     fn send_cmd(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
         resp.clear();
-        let tag = format!("K{:04}", self.tag);
-        self.curl.send(&format!("{tag} {cmd}\r\n").as_bytes())?;
-        self.recv_all(resp, &tag.as_bytes())?;
-        self.tag += 1;
+        self.curl.send(Self::TAG)?;
+        self.curl.send(&cmd.as_bytes())?;
+        self.curl.send(b"\r\n")?;
+        self.recv_all(resp)?;
         Some(())
     }
 
@@ -114,8 +112,7 @@ impl GmailImapClient {
         resp.clear();
         self.curl.send(lit)?;
         self.curl.send(b"\r\n")?;
-        let tag = format!("K{:04}", self.tag-1);
-        self.recv_all(resp, &tag.as_bytes())?;
+        self.recv_all(resp)?;
         Some(())
     }
 }
