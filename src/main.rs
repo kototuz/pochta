@@ -426,6 +426,7 @@ fn main() -> ExitCode {
     }
 }
 
+// TODO: Embed decoders to the repl (base64, quoted-printable)
 // TODO: Shortcut system
 // TODO: Integration with browsers (to open html) and editors (convenience)
 // TODO: Ability to store multiple clients?
