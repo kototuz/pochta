@@ -74,6 +74,7 @@ impl ImapSmtpClient {
     }
 
     fn recv_all_imap(&mut self, buf: &mut Vec<u8>) -> Option<()> {
+        buf.clear();
         self.wait_for_input()?;
         loop {
             match self.curl.recv(&mut self.resp_buf)? {
@@ -101,6 +102,7 @@ impl ImapSmtpClient {
     }
 
     fn recv_all_smtp(&mut self, buf: &mut Vec<u8>) -> Option<()> {
+        buf.clear();
         self.wait_for_input()?;
         loop {
             match self.curl.recv(&mut self.resp_buf)? {
@@ -132,7 +134,6 @@ impl ImapSmtpClient {
     }
 
     fn send_cmd_imap(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
-        resp.clear();
         self.curl.send(Self::TAG)?;
         self.curl.send(&cmd.as_bytes())?;
         self.curl.send(b"\r\n")?;
@@ -141,7 +142,6 @@ impl ImapSmtpClient {
     }
 
     fn send_cmd_smtp(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
-        resp.clear();
         self.curl.send(&cmd.as_bytes())?;
         self.curl.send(b"\r\n")?;
         self.recv_all_smtp(resp)?;
@@ -149,7 +149,6 @@ impl ImapSmtpClient {
     }
 
     fn send_raw_lit_imap(&mut self, lit: &[u8], resp: &mut Vec<u8>) -> Option<()> {
-        resp.clear();
         self.curl.send(lit)?;
         self.curl.send(b"\r\n")?;
         self.recv_all_imap(resp)?;
