@@ -23,9 +23,8 @@ const REFRESH_TOKEN: &str = env!("REFRESH_TOKEN");
 const USER:          &str = env!("EMAIL");
 
 trait Client {
-    fn send_cmd(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()>;
-    fn send_quit_cmd(&mut self, resp: &mut Vec<u8>) -> Option<()>;
-    fn send_cmd_not_wait_resp(&mut self, cmd: &str) -> Option<()>;
+    fn send_cmd(&mut self, cmd: &str) -> Option<()>;
+    fn send_quit_cmd(&mut self) -> Option<()>;
     fn recv_all(&mut self, buf: &mut Vec<u8>) -> Option<()>;
     fn sockfd(&self) -> c_int;
     fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()>;
@@ -43,6 +42,12 @@ trait Client {
                 Some(())
             }
         }
+    }
+
+    fn send_cmd_and_recv_resp(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
+        self.send_cmd(cmd)?;
+        self.recv_all(resp)?;
+        Some(())
     }
 }
 
@@ -96,7 +101,7 @@ impl Client for ImapClient {
     }
 
     fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()> {
-        self.send_cmd("AUTHENTICATE XOAUTH2", resp)?;
+        self.send_cmd_and_recv_resp("AUTHENTICATE XOAUTH2", resp)?;
         assert!(resp.starts_with(b"+"));
         self.curl.send(&auth_string.as_bytes())?;
         self.curl.send(b"\r\n")?;
@@ -136,23 +141,15 @@ impl Client for ImapClient {
         Some(())
     }
 
-    fn send_cmd(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
-        self.curl.send(Self::TAG)?;
-        self.curl.send(&cmd.as_bytes())?;
-        self.curl.send(b"\r\n")?;
-        self.recv_all(resp)?;
-        Some(())
-    }
-
-    fn send_cmd_not_wait_resp(&mut self, cmd: &str) -> Option<()> {
+    fn send_cmd(&mut self, cmd: &str) -> Option<()> {
         self.curl.send(Self::TAG)?;
         self.curl.send(&cmd.as_bytes())?;
         self.curl.send(b"\r\n")?;
         Some(())
     }
 
-    fn send_quit_cmd(&mut self, resp: &mut Vec<u8>) -> Option<()> {
-        self.send_cmd("LOGOUT", resp)?;
+    fn send_quit_cmd(&mut self) -> Option<()> {
+        self.send_cmd("LOGOUT")?;
         Some(())
     }
 }
@@ -177,7 +174,7 @@ impl Client for SmtpClient {
     }
 
     fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()> {
-        self.send_cmd(&format!("AUTH XOAUTH2 {auth_string}"), resp)?;
+        self.send_cmd_and_recv_resp(&format!("AUTH XOAUTH2 {auth_string}"), resp)?;
         Some(())
     }
 
@@ -217,21 +214,14 @@ impl Client for SmtpClient {
         Some(())
     }
 
-    fn send_cmd(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
-        self.curl.send(&cmd.as_bytes())?;
-        self.curl.send(b"\r\n")?;
-        self.recv_all(resp)?;
-        Some(())
-    }
-
-    fn send_cmd_not_wait_resp(&mut self, cmd: &str) -> Option<()> {
+    fn send_cmd(&mut self, cmd: &str) -> Option<()> {
         self.curl.send(&cmd.as_bytes())?;
         self.curl.send(b"\r\n")?;
         Some(())
     }
 
-    fn send_quit_cmd(&mut self, resp: &mut Vec<u8>) -> Option<()> {
-        self.send_cmd("QUIT", resp)?;
+    fn send_quit_cmd(&mut self) -> Option<()> {
+        self.send_cmd("QUIT")?;
         Some(())
     }
 }
@@ -390,20 +380,21 @@ usage:
                         client.recv_all(&mut server_resp)?;
                         stdout.write_all(&server_resp).unwrap();
                     } else {
-                        client.send_cmd_not_wait_resp(&line)?;
+                        client.send_cmd(&line)?;
                     }
                 } else {
                     if bytes.len() == 1 && bytes[0] == b'"' {
                         multiline_mode = true;
                         curr_prompt = &multiline_prompt;
                     } else {
-                        client.send_cmd(&line, &mut server_resp)?;
+                        client.send_cmd_and_recv_resp(&line, &mut server_resp)?;
                         stdout.write_all(&server_resp).unwrap();
                     }
                 }
             },
             Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
-                client.send_quit_cmd(&mut server_resp)?;
+                client.send_quit_cmd()?;
+                client.recv_all(&mut server_resp)?;
                 stdout.write_all(&server_resp).unwrap();
                 break;
             },
