@@ -44,10 +44,41 @@ trait Client {
         }
     }
 
-    fn send_cmd_and_recv_resp(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
-        self.send_cmd(cmd)?;
-        self.recv_all(resp)?;
-        Some(())
+    fn send_cmd_and_recv_resp(&mut self, mut cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
+        if cmd.as_bytes()[0] == b'!' {
+            if let Some(i) = cmd.find(' ') {
+                let decoder_name = &cmd[1..i];
+                cmd = &cmd[i+1..];
+                self.send_cmd(cmd)?;
+                self.recv_all(resp)?;
+
+                match decoder_name {
+                    "b64" => {
+                        match BASE64_STANDARD.decode(&resp) {
+                            Ok(decoded) => {
+                                *resp = decoded;
+                            },
+                            Err(e) => {
+                                eprintln!("error: could not decode response: {e}");
+                            }
+                        }
+                    },
+                    &_ => {
+                        eprintln!("error: decoder '{decoder_name}' not found");
+                    }
+                }
+
+                Some(())
+            } else {
+                resp.clear();
+                eprintln!("error: decoder is specified for empty command");
+                Some(())
+            }
+        } else {
+            self.send_cmd(cmd)?;
+            self.recv_all(resp)?;
+            Some(())
+        }
     }
 }
 
@@ -274,15 +305,19 @@ fn main2() -> Option<()> {
         print!("
 usage:
     Send single command:
-        imap>> select inbox
+        imap> select inbox
         <response>
 
     Send several commands at once (it's useful for writing mail):
-        imap>> \"
+        imap> \"
         > noop
         > noop
         > \"
         <response>
+
+    Decode command response using base64 decoder:
+        imap> !b64 fetch 1 body[1]
+        <decoded response>
 ");
         return Some(());
     }
