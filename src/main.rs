@@ -337,9 +337,12 @@ usage:
         <response>
 
     Send several commands at once (it's useful for writing mail):
-        imap> \"
-        > noop
-        > noop
+        smtp> data
+        smtp> \"
+        > Subject: Test
+        >
+        > Hello, world
+        > .
         > \"
         <response>
 
