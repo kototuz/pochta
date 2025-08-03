@@ -29,9 +29,10 @@ fn main2() -> Option<()> {
     let mut client_id = String::new();
     let mut client_secret = String::new();
     println!("1. Create new project using google developer console: https://console.developers.google.com");
-    println!("2. Find OAuth 'Web client' or create a new one");
-    input("3. Copy the client id: ", &mut client_id);
-    input("4. Copy the client secret: ", &mut client_secret);
+    println!("2. Add yourself as a tester of the project");
+    println!("3. Find OAuth 'Web client' or create a new one and add this redirect uri: {REDIRECT_URI}");
+    input("4. Copy the client id: ", &mut client_id);
+    input("5. Copy the client secret: ", &mut client_secret);
 
     let curl = CurlEasy::init()?;
 
@@ -49,7 +50,6 @@ fn main2() -> Option<()> {
 
     // Get verification code
     let mut verif_code = String::new();
-    println!("5. Add to the client this redirect uri: {REDIRECT_URI}");
     println!("6. Authorize token: {url}");
     input("7. Enter verification code: ", &mut verif_code);
 
