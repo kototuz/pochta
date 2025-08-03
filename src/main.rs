@@ -45,47 +45,10 @@ trait Client {
         }
     }
 
-    fn send_cmd_and_recv_resp(&mut self, mut cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
-        if cmd.as_bytes()[0] == b'!' {
-            if let Some(i) = cmd.find(' ') {
-                let decoder_name = &cmd[1..i];
-                cmd = &cmd[i+1..];
-                self.send_cmd(cmd)?;
-                self.recv_all(resp)?;
-
-                match decoder_name {
-                    "b64" => {
-                        match BASE64_STANDARD.decode(&resp) {
-                            Ok(decoded) => *resp = decoded,
-                            Err(e) => {
-                                eprintln!("error: could not decode response: {e}");
-                            }
-                        }
-                    },
-                    "qp" => {
-                        match qp::decode(&resp, qp::ParseMode::Robust) {
-                            Ok(decoded) => *resp = decoded,
-                            Err(e) => {
-                                eprintln!("error: could not decode response: {e}");
-                            }
-                        }
-                    },
-                    &_ => {
-                        eprintln!("error: decoder '{decoder_name}' not found");
-                    }
-                }
-
-                Some(())
-            } else {
-                resp.clear();
-                eprintln!("error: decoder is specified for empty command");
-                Some(())
-            }
-        } else {
-            self.send_cmd(cmd)?;
-            self.recv_all(resp)?;
-            Some(())
-        }
+    fn send_cmd_and_recv_resp(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
+        self.send_cmd(cmd)?;
+        self.recv_all(resp)?;
+        Some(())
     }
 }
 
@@ -298,6 +261,36 @@ fn get_new_auth_string() -> Option<String> {
     Some(auth_string)
 }
 
+fn apply_tools(mut tools: &str, buf: &mut Vec<u8>) {
+    assert_eq!(tools.as_bytes()[0], b'!');
+    while let Some(i) = tools.rfind('!') {
+        let tool = &tools[i+1..];
+        match tool {
+            "b64" => {
+                match BASE64_STANDARD.decode(&buf) {
+                    Ok(decoded) => *buf = decoded,
+                    Err(e) => {
+                        eprintln!("error: could not decode: {e}");
+                    }
+                }
+            },
+            "qp" => {
+                match qp::decode(&buf, qp::ParseMode::Robust) {
+                    Ok(decoded) => *buf = decoded,
+                    Err(e) => {
+                        eprintln!("error: could not decode: {e}");
+                    }
+                }
+            },
+            &_ => {
+                eprintln!("error: tool '{tool}' not found");
+            }
+        }
+
+        tools = &tools[..i];
+    }
+}
+
 fn main2() -> Option<()> {
     // Parse command line flags
     let mut flags = Flags::parse()?;
@@ -322,12 +315,16 @@ usage:
         > \"
         <response>
 
-    Decode command response using base64 decoder:
+    Decode command response using base64 decoder tool:
         imap> !b64 fetch 1 body[1]
         <decoded response>
 
-    Decode command response using quoted-printable decoder:
+    Decode command response using quoted-printable decoder tool:
         imap> !qp fetch 1 body[1]
+        <decoded response>
+
+    Chain tools (!qp <- !b64 <-):
+        imap> !qp!b64 fetch 1 body[header]
         <decoded response>
 ");
         return Some(());
@@ -419,6 +416,8 @@ usage:
                 }
 
                 let bytes = line.as_bytes();
+                if bytes.is_empty() { continue; }
+
                 if multiline_mode {
                     if bytes.len() == 1 && bytes[0] == b'"' {
                         multiline_mode = false;
@@ -433,7 +432,20 @@ usage:
                         multiline_mode = true;
                         curr_prompt = &multiline_prompt;
                     } else {
-                        client.send_cmd_and_recv_resp(&line, &mut server_resp)?;
+                        if bytes[0] == b'!' {
+                            if let Some(i) = line.find(' ') {
+                                let tools = &line[..i];
+                                let cmd = &line[i+1..];
+                                client.send_cmd_and_recv_resp(cmd, &mut server_resp);
+                                apply_tools(tools, &mut server_resp);
+                            } else {
+                                server_resp.clear();
+                                eprintln!("error: command not specified");
+                            }
+                        } else {
+                            client.send_cmd_and_recv_resp(&line, &mut server_resp)?;
+                        }
+
                         stdout.write_all(&server_resp).unwrap();
                     }
                 }
