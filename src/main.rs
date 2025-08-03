@@ -282,6 +282,34 @@ fn apply_tools(mut tools: &str, buf: &mut Vec<u8>) {
                     }
                 }
             },
+            "b" => {
+                // Write buffer to file which will be provided to browser as html
+                let mut file = match std::fs::File::create("/tmp/pochta-response.html") {
+                    Ok(f) => f,
+                    Err(e) => {
+                        eprintln!("error: could not create file '/tmp/pochta-response.html': {e}");
+                        return;
+                    }
+                };
+                file.write_all(&buf).unwrap();
+
+                // Get browser executable
+                let browser = match std::env::var("BROWSER") {
+                    Ok(v) => v,
+                    Err(e) => {
+                        eprintln!("error: could not get environment variable 'BROWSER': {e}");
+                        return;
+                    }
+                };
+
+                let res = std::process::Command::new(browser)
+                    .arg("/tmp/pochta-response.html")
+                    .status();
+
+                if let Err(_) = res {
+                    eprintln!("error: could not run browser");
+                }
+            },
             &_ => {
                 eprintln!("error: tool '{tool}' not found");
             }
@@ -323,8 +351,12 @@ usage:
         imap> !qp fetch 1 body[1]
         <decoded response>
 
-    Chain tools (!qp <- !b64 <-):
-        imap> !qp!b64 fetch 1 body[header]
+    Open the command response in browser (ensure that env variable 'BROWSER' is set):
+        imap> !b fetch 1 body[text]
+        <response>
+
+    Chain tools (!b <- !qp <-):
+        imap> !b!b64 fetch 1 body[header]
         <decoded response>
 ");
         return Some(());
@@ -433,6 +465,7 @@ usage:
                         curr_prompt = &multiline_prompt;
                     } else {
                         if bytes[0] == b'!' {
+                            // Apply tools to the command response
                             if let Some(i) = line.find(' ') {
                                 let tools = &line[..i];
                                 let cmd = &line[i+1..];
@@ -475,7 +508,6 @@ fn main() -> ExitCode {
     }
 }
 
-// TODO: Embed decoders to the repl (base64, quoted-printable)
 // TODO: Shortcut system
 // TODO: Integration with browsers (to open html) and editors (convenience)
 // TODO: Ability to store multiple clients?
