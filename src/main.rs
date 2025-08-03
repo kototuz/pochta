@@ -14,6 +14,7 @@ use flag::Flags;
 
 use tinyjson::JsonValue;
 use base64::prelude::*;
+use quoted_printable as qp;
 
 use rustyline::error::ReadlineError;
 
@@ -55,9 +56,15 @@ trait Client {
                 match decoder_name {
                     "b64" => {
                         match BASE64_STANDARD.decode(&resp) {
-                            Ok(decoded) => {
-                                *resp = decoded;
-                            },
+                            Ok(decoded) => *resp = decoded,
+                            Err(e) => {
+                                eprintln!("error: could not decode response: {e}");
+                            }
+                        }
+                    },
+                    "qp" => {
+                        match qp::decode(&resp, qp::ParseMode::Robust) {
+                            Ok(decoded) => *resp = decoded,
                             Err(e) => {
                                 eprintln!("error: could not decode response: {e}");
                             }
@@ -317,6 +324,10 @@ usage:
 
     Decode command response using base64 decoder:
         imap> !b64 fetch 1 body[1]
+        <decoded response>
+
+    Decode command response using quoted-printable decoder:
+        imap> !qp fetch 1 body[1]
         <decoded response>
 ");
         return Some(());

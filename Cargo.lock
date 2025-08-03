@@ -127,9 +127,16 @@ name = "pochta"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "quoted_printable",
  "rustyline",
  "tinyjson",
 ]
+
+[[package]]
+name = "quoted_printable"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "640c9bd8497b02465aeef5375144c26062e0dcd5939dfcbb0f5db76cb8c17c73"
 
 [[package]]
 name = "radix_trie"
