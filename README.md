@@ -19,10 +19,8 @@ K0001 OK [READ-WRITE] inbox selected. (Success)
 
 ## Build
 
-Run "build script" and follow instructions.
-It will build an actual executable
 ```console
-$ cargo run --bin make
+$ cargo build
 ```
 
 ## Usage
