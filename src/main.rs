@@ -271,16 +271,17 @@ fn main2() -> Option<()> {
 
         profile_file.write_all(
 b"{
-  \"client_id\": \"REPLACE_ME\",
-  \"client_secret\": \"REPLACE_ME\",
-  \"email\": \"REPLACE_ME\",
-  \"refresh_token\": \"AUTO-GENERATED\",
+  \"client_id\": \"\",
+  \"client_secret\": \"\",
+  \"email\": \"\",
+  \"refresh_token\": \"enter 'pochta -p <this-profile> -update-refresh-token' after providing 'client_id', 'client_secret' and 'email'\",
   \"use_history_file\": false,
   \"prompt_color\": \"green\"
 }"
         ).unwrap();
 
         println!("new profile is generated at '{}'", path_buf.display());
+        println!("consider using 'pochta -help-profile' to setup new profile");
 
         return Some(());
     }
