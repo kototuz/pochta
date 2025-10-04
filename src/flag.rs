@@ -110,10 +110,10 @@ impl Flags {
         for FlagDef { name, desc, def_val } in &self.defined {
             match def_val {
                 FlagValue::Str(val) => {
-                    eprintln!("    -{name} <str> - {desc} (default: \"{val}\")");
+                    eprintln!("    -{name} <str>\n        {desc} (default: \"{val}\")");
                 },
                 FlagValue::Bool(val) => {
-                    eprintln!("    -{name} - {desc} (default: {val})");
+                    eprintln!("    -{name}\n        {desc} (default: {val})");
                 }
             }
         }

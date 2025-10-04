@@ -1,231 +1,27 @@
 use std::collections::HashMap;
-use std::ffi::{c_int, c_char, c_short, CStr};
-use std::io::{Write, stdout};
 use std::process::ExitCode;
-use std::path::Path;
+
+use tinyjson::JsonValue;
+use base64::prelude::*;
 
 #[allow(unused)]
 mod curl;
 use curl::CurlEasy;
-use curl::RecvResult;
 
 mod flag;
 use flag::Flags;
 
-use tinyjson::JsonValue;
-use base64::prelude::*;
-use quoted_printable as qp;
+mod client;
+use client::Client;
+use client::ImapClient;
+use client::SmtpClient;
 
-use rustyline::error::ReadlineError;
+mod console;
 
 const CLIENT_ID:     &str = env!("CLIENT_ID");
 const CLIENT_SECRET: &str = env!("CLIENT_SECRET");
 const REFRESH_TOKEN: &str = env!("REFRESH_TOKEN");
 const USER:          &str = env!("EMAIL");
-
-trait Client {
-    fn send_cmd(&mut self, cmd: &str) -> Option<()>;
-    fn send_quit_cmd(&mut self) -> Option<()>;
-    fn recv_all(&mut self, buf: &mut Vec<u8>) -> Option<()>;
-    fn sockfd(&self) -> c_int;
-    fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()>;
-    fn prompt_str(&self) -> &'static str;
-
-    fn wait_for_input(&self) -> Option<()> {
-        const POLLIN: c_short = 1;
-        let mut p = Pollfd { fd: self.sockfd(), events: POLLIN, revents: 0 };
-        unsafe {
-            if poll(&mut p, 1, -1) == -1 {
-                let err_str = CStr::from_ptr(strerror(*errno())).to_str().unwrap();
-                eprintln!("error: poll: {}", err_str);
-                None
-            } else {
-                Some(())
-            }
-        }
-    }
-
-    fn send_cmd_and_recv_resp(&mut self, cmd: &str, resp: &mut Vec<u8>) -> Option<()> {
-        self.send_cmd(cmd)?;
-        self.recv_all(resp)?;
-        Some(())
-    }
-}
-
-struct ImapClient {
-    curl:     CurlEasy,
-    sockfd:   c_int,
-    resp_buf: [u8; 1024]
-}
-
-struct SmtpClient {
-    curl:     CurlEasy,
-    sockfd:   c_int,
-    resp_buf: [u8; 1024]
-}
-
-#[repr(C)]
-struct Pollfd {
-    fd:      c_int,
-    events:  c_short,
-    revents: c_short,
-}
-
-#[link(name = "c")]
-unsafe extern "C" {
-    #[link_name = "__errno_location"]
-    fn errno() -> *const c_int;
-
-    fn strerror(err: c_int) -> *const c_char;
-    fn poll(pollfds: *mut Pollfd, count: u64, timeout: c_int) -> c_int;
-}
-
-impl ImapClient {
-    const TAG: &[u8] = b"POCHTA ";
-
-    fn connect() -> Option<Self> {
-        let curl = CurlEasy::init()?;
-        curl.set_url(c"imaps://imap.gmail.com:993")?;
-        curl.set_connect_only()?;
-        curl.perform()?;
-        Some(Self {
-            sockfd:   curl.get_sockfd()?,
-            curl:     curl,
-            resp_buf: [0u8; 1024],
-        })
-    }
-}
-
-impl Client for ImapClient {
-    fn prompt_str(&self) -> &'static str {
-        "imap> "
-    }
-
-    fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()> {
-        self.send_cmd_and_recv_resp("AUTHENTICATE XOAUTH2", resp)?;
-        assert!(resp.starts_with(b"+"));
-        self.curl.send(&auth_string.as_bytes())?;
-        self.curl.send(b"\r\n")?;
-        self.recv_all(resp)?;
-        Some(())
-    }
-
-    fn sockfd(&self) -> c_int {
-        self.sockfd
-    }
-
-    fn recv_all(&mut self, buf: &mut Vec<u8>) -> Option<()> {
-        buf.clear();
-        self.wait_for_input()?;
-        loop {
-            match self.curl.recv(&mut self.resp_buf)? {
-                RecvResult::Ok(recv) => buf.extend_from_slice(&self.resp_buf[..recv]),
-                RecvResult::Again => {
-                    if buf.ends_with(b"\r\n") {
-                        let last_str_begin = buf.iter()
-                            .take(buf.len() - 2)
-                            .rposition(|s| *s == b'\n')
-                            .map(|pos| pos+1)
-                            .unwrap_or(0);
-
-                        let last_str = &buf[last_str_begin..];
-                        if last_str.starts_with(Self::TAG) || last_str.starts_with(b"+") {
-                            break;
-                        }
-                    }
-
-                    self.wait_for_input()?;
-                }
-            }
-        }
-
-        Some(())
-    }
-
-    fn send_cmd(&mut self, cmd: &str) -> Option<()> {
-        self.curl.send(Self::TAG)?;
-        self.curl.send(&cmd.as_bytes())?;
-        self.curl.send(b"\r\n")?;
-        Some(())
-    }
-
-    fn send_quit_cmd(&mut self) -> Option<()> {
-        self.send_cmd("LOGOUT")?;
-        Some(())
-    }
-}
-
-impl SmtpClient {
-    fn connect() -> Option<Self> {
-        let curl = CurlEasy::init()?;
-        curl.set_url(c"smtps://smtp.gmail.com:465")?;
-        curl.set_connect_only()?;
-        curl.perform()?;
-        Some(Self {
-            sockfd:   curl.get_sockfd()?,
-            curl:     curl,
-            resp_buf: [0u8; 1024],
-        })
-    }
-}
-
-impl Client for SmtpClient {
-    fn prompt_str(&self) -> &'static str {
-        "smtp> "
-    }
-
-    fn auth(&mut self, auth_string: &str, resp: &mut Vec<u8>) -> Option<()> {
-        self.send_cmd_and_recv_resp(&format!("AUTH XOAUTH2 {auth_string}"), resp)?;
-        Some(())
-    }
-
-    fn sockfd(&self) -> c_int {
-        self.sockfd
-    }
-
-    fn recv_all(&mut self, buf: &mut Vec<u8>) -> Option<()> {
-        buf.clear();
-        self.wait_for_input()?;
-        loop {
-            match self.curl.recv(&mut self.resp_buf)? {
-                RecvResult::Ok(recv) => buf.extend_from_slice(&self.resp_buf[..recv]),
-                RecvResult::Again => {
-                    if buf.ends_with(b"\r\n") {
-                        let last_str_begin = buf.iter()
-                            .take(buf.len() - 2)
-                            .rposition(|s| *s == b'\n')
-                            .map(|pos| pos+1)
-                            .unwrap_or(0);
-
-                        let last_str = &buf[last_str_begin..];
-                        assert!(last_str[0].is_ascii_digit());
-                        assert!(last_str[1].is_ascii_digit());
-                        assert!(last_str[2].is_ascii_digit());
-
-                        if last_str[3] == b' ' {
-                            break;
-                        }
-                    }
-
-                    self.wait_for_input()?;
-                }
-            }
-        }
-
-        Some(())
-    }
-
-    fn send_cmd(&mut self, cmd: &str) -> Option<()> {
-        self.curl.send(&cmd.as_bytes())?;
-        self.curl.send(b"\r\n")?;
-        Some(())
-    }
-
-    fn send_quit_cmd(&mut self) -> Option<()> {
-        self.send_cmd("QUIT")?;
-        Some(())
-    }
-}
 
 fn get_new_auth_string() -> Option<String> {
     let curl = CurlEasy::init()?;
@@ -259,64 +55,6 @@ fn get_new_auth_string() -> Option<String> {
     let auth_string = BASE64_STANDARD.encode(auth_string.as_bytes());
 
     Some(auth_string)
-}
-
-fn apply_tools(mut tools: &str, buf: &mut Vec<u8>) {
-    assert_eq!(tools.as_bytes()[0], b'!');
-    while let Some(i) = tools.rfind('!') {
-        let tool = &tools[i+1..];
-        match tool {
-            "b64" => {
-                match BASE64_STANDARD.decode(&buf) {
-                    Ok(decoded) => *buf = decoded,
-                    Err(e) => {
-                        eprintln!("error: could not decode: {e}");
-                    }
-                }
-            },
-            "qp" => {
-                match qp::decode(&buf, qp::ParseMode::Robust) {
-                    Ok(decoded) => *buf = decoded,
-                    Err(e) => {
-                        eprintln!("error: could not decode: {e}");
-                    }
-                }
-            },
-            "b" => {
-                // Write buffer to file which will be provided to browser as html
-                let mut file = match std::fs::File::create("/tmp/pochta-response.html") {
-                    Ok(f) => f,
-                    Err(e) => {
-                        eprintln!("error: could not create file '/tmp/pochta-response.html': {e}");
-                        return;
-                    }
-                };
-                file.write_all(&buf).unwrap();
-
-                // Get browser executable
-                let browser = match std::env::var("BROWSER") {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("error: could not get environment variable 'BROWSER': {e}");
-                        return;
-                    }
-                };
-
-                let res = std::process::Command::new(browser)
-                    .arg("/tmp/pochta-response.html")
-                    .status();
-
-                if let Err(_) = res {
-                    eprintln!("error: could not run browser");
-                }
-            },
-            &_ => {
-                eprintln!("error: tool '{tool}' not found");
-            }
-        }
-
-        tools = &tools[..i];
-    }
 }
 
 fn main2() -> Option<()> {
@@ -385,49 +123,8 @@ usage:
         }
     }
 
-    let mut load_history: fn(rl: &mut rustyline::DefaultEditor, path: &Path) = |_,_| {};
-    let mut save_history: fn(rl: &mut rustyline::DefaultEditor, path: &Path) = |_,_| {};
-    if history_file_flag {
-        load_history = |rl, path| {
-            match rl.load_history(path) {
-                Err(ReadlineError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                    println!("info: history file does not exist - creating history file '~/.pochta/history.txt'");
-                    if let Err(e) = std::fs::create_dir_all(path.parent().unwrap()) {
-                        eprintln!("error: could not create history file: {e}");
-                    }
-                    if let Err(e) = std::fs::File::create(path) {
-                        eprintln!("error: could not create history file: {e}");
-                    }
-                },
-                Err(e) => {
-                    eprintln!("error: could not load history: {e}");
-                },
-                _ => {}
-            }
-        };
-
-        save_history = |rl, path| {
-            if let Err(e) = rl.save_history(path) {
-                eprintln!("error: could not append to history: {e}");
-            }
-        };
-    }
-
-    let client: &mut dyn Client = if smtp_flag {
-        &mut SmtpClient::connect()?
-    } else {
-        &mut ImapClient::connect()?
-    };
-
-    // Authenticate
-    let mut server_resp = Vec::<u8>::new();
-    let mut stdout = stdout();
-    let auth_string = get_new_auth_string()?;
-    client.auth(&auth_string, &mut server_resp)?;
-    stdout.write_all(&server_resp).unwrap();
-
     // Init rustyline
-    let mut rl = match rustyline::DefaultEditor::new() {
+    let rl = match rustyline::DefaultEditor::new() {
         Ok(rl) => rl,
         Err(e) => {
             eprintln!("error: could not init 'rustyline': {e}");
@@ -435,73 +132,23 @@ usage:
         }
     };
 
-    let history_path = Path::new(concat!(env!("HOME"), "/.pochta/history.txt"));
-    load_history(&mut rl, &history_path);
+    let client: &mut dyn Client = if smtp_flag {
+        &mut SmtpClient::connect()?
+    } else {
+        &mut ImapClient::connect()?
+    };
 
-    // Main loop
-    let default_prompt = format!("{prompt_color}{}\x1b[0m", client.prompt_str());
-    let multiline_prompt = format!("{prompt_color}> \x1b[0m");
-    let mut curr_prompt = &default_prompt;
-    let mut multiline_mode = false;
-    loop {
-        match rl.readline(curr_prompt) {
-            Ok(line) => {
-                if let Err(e) = rl.add_history_entry(&line) {
-                    eprintln!("error: could not add entry to history: {e}");
-                }
-
-                let bytes = line.as_bytes();
-                if bytes.is_empty() { continue; }
-
-                if multiline_mode {
-                    if bytes.len() == 1 && bytes[0] == b'"' {
-                        multiline_mode = false;
-                        curr_prompt = &default_prompt;
-                        client.recv_all(&mut server_resp)?;
-                        stdout.write_all(&server_resp).unwrap();
-                    } else {
-                        client.send_cmd(&line)?;
-                    }
-                } else {
-                    if bytes.len() == 1 && bytes[0] == b'"' {
-                        multiline_mode = true;
-                        curr_prompt = &multiline_prompt;
-                    } else {
-                        if bytes[0] == b'!' {
-                            // Apply tools to the command response
-                            if let Some(i) = line.find(' ') {
-                                let tools = &line[..i];
-                                let cmd = &line[i+1..];
-                                client.send_cmd_and_recv_resp(cmd, &mut server_resp);
-                                apply_tools(tools, &mut server_resp);
-                            } else {
-                                server_resp.clear();
-                                eprintln!("error: command not specified");
-                            }
-                        } else {
-                            client.send_cmd_and_recv_resp(&line, &mut server_resp)?;
-                        }
-
-                        stdout.write_all(&server_resp).unwrap();
-                    }
-                }
-            },
-            Err(ReadlineError::Interrupted | ReadlineError::Eof) => {
-                client.send_quit_cmd()?;
-                client.recv_all(&mut server_resp)?;
-                stdout.write_all(&server_resp).unwrap();
-                break;
-            },
-            Err(err) => {
-                eprintln!("error: rustyline: {err}");
-                return None;
-            },
-        }
-    }
-
-    save_history(&mut rl, &history_path);
-
-    Some(())
+    console::run(
+        rl,
+        client,
+        get_new_auth_string()?,
+        if history_file_flag {
+            Some(concat!(env!("HOME"), "/.pochta/history.txt"))
+        } else {
+            None
+        },
+        prompt_color
+    )
 }
 
 fn main() -> ExitCode {
