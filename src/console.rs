@@ -76,7 +76,7 @@ pub fn run(
         let path = Path::new(path);
         match rl.load_history(path) {
                 Err(ReadlineError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                    println!("info: history file does not exist - creating history file '~/.pochta/history.txt'");
+                    println!("info: history file does not exist - creating history file '{}'", path.display());
                     if let Err(e) = std::fs::create_dir_all(path.parent().unwrap()) {
                         eprintln!("error: could not create history file: {e}");
                     }

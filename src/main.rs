@@ -48,15 +48,22 @@ fn get_new_auth_string(
     let mut resp = Vec::<u8>::new();
     curl.set_write_data(&mut resp)?;
 
+    // Request new access token
     curl.perform()?;
 
-    // Request new access token
-    // TODO: Maybe error reporting, but it will crash only if google change
-    //       response
+    // This will fail only if google change the response
     let text = std::str::from_utf8(&resp).unwrap();
     let json: JsonValue = text.parse().unwrap();
     let json: &HashMap<String, JsonValue> = json.get().unwrap();
-    let access_token: &String = json["access_token"].get().unwrap();
+
+    let access_token: &String = match json.get("access_token") {
+        Some(v) => v.get().unwrap(),
+        None => {
+            eprintln!("error: could not fetch access token\n");
+            eprintln!("Check your profile. Maybe refresh token is outdated");
+            return None;
+        }
+    };
 
     // Construct and encode new authorization string
     let auth_string = format!("user={}\x01auth=Bearer {}\x01\x01", email, access_token);
@@ -177,6 +184,8 @@ fn update_refresh_token(
 fn main2() -> Option<()> {
     let mut flags = Flags::parse()?;
     let help_flag = flags.flag_bool("help", "Print this help", false)?;
+    let help_usage_flag = flags.flag_bool("help-usage", "Print help about how to use this program", false)?;
+    let help_profile_flag = flags.flag_bool("help-profile", "Print help about how to setup profile", false)?;
     let smtp_flag = flags.flag_bool("smtp", "Connect to SMTP server (send emails) instead of IMAP (retrieve emails)", false)?;
     let new_profile = flags.flag_str("new-profile", "Create new profile", "")?;
     let profile = flags.flag_str("p", "Use this profile", "")?;
@@ -184,8 +193,13 @@ fn main2() -> Option<()> {
     flags.check()?;
 
     if help_flag {
-        println!("
-usage:
+        flags.print_flags();
+        return Some(());
+    }
+
+    if help_usage_flag {
+        print!(
+"usage:
     Send single command:
         imap> select inbox
         <response>
@@ -215,8 +229,21 @@ usage:
     Chain tools (!b <- !qp <-):
         imap> !b!b64 fetch 1 body[header]
         <decoded response>
-");
-        flags.print_flags();
+"
+        );
+
+        return Some(());
+    }
+
+    if help_profile_flag {
+        println!("1. Create new profile: 'pochta -new-profile <name>'");
+        println!("2. Enter your email into profile");
+        println!("3. Create new project using google developer console: https://console.developers.google.com.");
+        println!("   Find client id and client secret there and enter these values into your profile.");
+        println!("4. Add yourself as a tester of the project.");
+        println!("5. Find OAuth 'Web client' or create a new one and add this redirect uri: {REDIRECT_URI}");
+        println!("6. Run: 'pochta -p <create_profile> -update-refresh-token'");
+        println!("7. Here you go");
         return Some(());
     }
 
@@ -234,7 +261,7 @@ usage:
         path_buf.push(new_profile);
         path_buf.set_extension("json");
 
-        let mut profile_file = match std::fs::File::create_new(path_buf) {
+        let mut profile_file = match std::fs::File::create_new(&path_buf) {
             Ok(f) => f,
             Err(e) => {
                 eprintln!("error: could not create new profile: {e}");
@@ -252,6 +279,8 @@ b"{
   \"prompt_color\": \"green\"
 }"
         ).unwrap();
+
+        println!("new profile is generated at '{}'", path_buf.display());
 
         return Some(());
     }
@@ -331,6 +360,7 @@ b"{
             &client_secret,
         )?;
 
+        // Update profile file
         if let Err(e) = std::fs::write(path_buf, JsonValue::from(profile).format().unwrap().as_bytes()) {
             eprintln!("error: could not update profile: {e}");
             return None;
