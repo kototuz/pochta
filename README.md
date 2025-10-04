@@ -27,7 +27,6 @@ $ cargo build
 
 ``` console
 $ ./target/release/pochta -help
-$ ./target/release/pochta
 ```
 
 In `pochta` you enter raw imap/smtp commands.
