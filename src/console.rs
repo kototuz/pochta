@@ -112,6 +112,11 @@ pub fn run(
                 let bytes = line.as_bytes();
                 if bytes.is_empty() { continue; }
 
+                // TODO: I think multiline mode is only applicable to 'smtp'.
+                // In that way we can send '<CRLF>.<CRLF>' when exit from multiline mode.
+                // '<CRLF>.<CRLF>' is a sequence to notify server about the email end.
+                // Now user must type this sequence by himself. If user don't type the sequence
+                // the program will break
                 if multiline_mode {
                     if bytes.len() == 1 && bytes[0] == b'"' {
                         multiline_mode = false;
